@@ -2,6 +2,7 @@
 using System.IO;
 
 using System.Collections;
+using System.Collections.Concurrent;
 #if FEAT_IKVM
 using Type = IKVM.Reflection.Type;
 using IKVM.Reflection;
@@ -81,7 +82,7 @@ namespace ProtoBuf.Meta
                 case ProtoTypeCode.Uri:
                     return WireType.String;
             }
-            
+
             if ((modelKey = GetKey(ref type)) >= 0)
             {
                 return WireType.String;
@@ -99,7 +100,7 @@ namespace ProtoBuf.Meta
         ///  - IEnumerable sequences of any type handled by TrySerializeAuxiliaryType
         ///  
         /// </summary>
-        internal bool TrySerializeAuxiliaryType(ProtoWriter writer,  Type type, DataFormat format, int tag, object value, bool isInsideList, object parentList)
+        internal bool TrySerializeAuxiliaryType(ProtoWriter writer, Type type, DataFormat format, int tag, object value, bool isInsideList, object parentList)
         {
             if (type == null) { type = value.GetType(); }
 
@@ -135,11 +136,13 @@ namespace ProtoBuf.Meta
                     }
                 }
             }
-            
-            if(wireType != WireType.None) {
+
+            if (wireType != WireType.None)
+            {
                 ProtoWriter.WriteFieldHeader(tag, wireType, writer);
             }
-            switch(typecode) {
+            switch (typecode)
+            {
                 case ProtoTypeCode.Int16: ProtoWriter.WriteInt16((short)value, writer); return true;
                 case ProtoTypeCode.Int32: ProtoWriter.WriteInt32((int)value, writer); return true;
                 case ProtoTypeCode.Int64: ProtoWriter.WriteInt64((long)value, writer); return true;
@@ -548,7 +551,7 @@ namespace ProtoBuf.Meta
         {
             if (type == null)
             {
-                if(value == null) throw new ArgumentNullException("value");
+                if (value == null) throw new ArgumentNullException("value");
                 type = MapType(value.GetType());
             }
             int key = GetKey(ref type);
@@ -652,7 +655,7 @@ namespace ProtoBuf.Meta
         /// original instance.</returns>
         public object Deserialize(Stream source, object value, System.Type type, int length)
             => Deserialize(source, value, type, length, null);
-        
+
         /// <summary>
         /// Applies a protocol-buffer stream to an existing instance (which may be null).
         /// </summary>
@@ -831,7 +834,7 @@ namespace ProtoBuf.Meta
             if (listType == model.MapType(typeof(string)) || listType.IsArray
                 || !model.MapType(typeof(IEnumerable)).IsAssignableFrom(listType)) return null;
 #endif
-            
+
             BasicList candidates = new BasicList();
 #if WINRT
             foreach (MethodInfo method in listType.GetRuntimeMethods())
@@ -851,7 +854,7 @@ namespace ProtoBuf.Meta
             string name = listType.Name;
             bool isQueueStack = name != null && (name.IndexOf("Queue") >= 0 || name.IndexOf("Stack") >= 0);
 #if !NO_GENERICS
-            if(!isQueueStack)
+            if (!isQueueStack)
             {
                 TestEnumerableListPatterns(model, candidates, listType);
 #if WINRT
@@ -1003,7 +1006,7 @@ namespace ProtoBuf.Meta
                     {   // we'll stay with what we had, thanks
                     }
                     else
-                    { 
+                    {
                         Array existing = (Array)value;
                         newArray = Array.CreateInstance(itemType, existing.Length + arraySurrogate.Count);
                         Array.Copy(existing, newArray, existing.Length);
@@ -1131,7 +1134,7 @@ namespace ProtoBuf.Meta
                 // otherwise, not a happy bunny...
                 ThrowUnexpectedType(type);
             }
-            
+
             // to treat correctly, should read all values
 
             while (true)
@@ -1192,7 +1195,7 @@ namespace ProtoBuf.Meta
                     case ProtoTypeCode.ByteArray: value = ProtoReader.AppendBytes((byte[])value, reader); continue;
                     case ProtoTypeCode.TimeSpan: value = BclHelpers.ReadTimeSpan(reader); continue;
                     case ProtoTypeCode.Guid: value = BclHelpers.ReadGuid(reader); continue;
-                    case ProtoTypeCode.Uri: value = new Uri(reader.ReadString(), UriKind.RelativeOrAbsolute); continue; 
+                    case ProtoTypeCode.Uri: value = new Uri(reader.ReadString(), UriKind.RelativeOrAbsolute); continue;
                 }
 
             }
@@ -1220,49 +1223,31 @@ namespace ProtoBuf.Meta
         }
 #endif
 
+        private static readonly ConcurrentDictionary<Type, string> FullNames = new ConcurrentDictionary<Type, string>();
+
+        private static string GetFullName(Type type)
+        {
+            if (FullNames.TryGetValue(type, out var result))
+                return result;
+
+            result = type.FullName;
+            FullNames.AddOrUpdate(type, result, (key, existingVal) => existingVal);
+            return result;
+        }
+
+
         /// <summary>
         /// Applies common proxy scenarios, resolving the actual type to consider
         /// </summary>
         protected internal static Type ResolveProxies(Type type)
         {
             if (type == null) return null;
-#if !NO_GENERICS            
             if (type.IsGenericParameter) return null;
             // Nullable<T>
-            Type tmp =  Helpers.GetUnderlyingType(type);
+            Type tmp = Helpers.GetUnderlyingType(type);
             if (tmp != null) return tmp;
-#endif
 
-#if !(WINRT || CF)
-            // EF POCO
-            string fullName = type.FullName;
-            if (fullName != null && fullName.StartsWith("System.Data.Entity.DynamicProxies."))
-            {
-#if  COREFX
-                return type.GetTypeInfo().BaseType;
-#else
-                return type.BaseType;
-#endif
-            }
-
-            // NHibernate
-            Type[] interfaces = type.GetInterfaces();
-            for(int i = 0 ; i < interfaces.Length ; i++)
-            {
-                switch(interfaces[i].FullName)
-                {
-                    case "NHibernate.Proxy.INHibernateProxy":
-                    case "NHibernate.Proxy.DynamicProxy.IProxy":
-                    case "NHibernate.Intercept.IFieldInterceptorAccessor":
-#if COREFX
-                        return type.GetTypeInfo().BaseType;
-#else
-                        return type.BaseType;
-#endif
-                }
-            }
-#endif
-                        return null;
+            return null;
         }
         /// <summary>
         /// Indicates whether the supplied type is explicitly modelled by the model
@@ -1282,7 +1267,8 @@ namespace ProtoBuf.Meta
             if (key < 0)
             {
                 Type normalized = ResolveProxies(type);
-                if (normalized != null) {
+                if (normalized != null)
+                {
                     type = normalized; // hence ref
                     key = GetKeyImpl(type);
                 }
@@ -1311,7 +1297,7 @@ namespace ProtoBuf.Meta
         /// either the original instance was null, or the stream defines a known sub-type of the
         /// original instance.</returns>
         protected internal abstract object Deserialize(int key, object value, ProtoReader source);
-        
+
         //internal ProtoSerializer Create(IProtoSerializer head)
         //{
         //    return new RuntimeSerializer(head, this);
@@ -1356,7 +1342,7 @@ namespace ProtoBuf.Meta
             {
                 using (MemoryStream ms = new MemoryStream())
                 {
-                    using(ProtoWriter writer = new ProtoWriter(ms, this, null))
+                    using (ProtoWriter writer = new ProtoWriter(ms, this, null))
                     {
                         writer.SetRootObject(value);
                         Serialize(key, value, writer);
@@ -1479,7 +1465,7 @@ namespace ProtoBuf.Meta
 
         internal static System.Type DeserializeType(TypeModel model, string value)
         {
-            
+
             if (model != null)
             {
                 TypeFormatEventHandler handler = model.DynamicTypeFormatting;
@@ -1530,7 +1516,7 @@ namespace ProtoBuf.Meta
 
             // is it a basic type?
             ProtoTypeCode typeCode = Helpers.GetTypeCode(type);
-            switch(typeCode)
+            switch (typeCode)
             {
                 case ProtoTypeCode.Empty:
                 case ProtoTypeCode.Unknown:
